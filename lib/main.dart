@@ -104,17 +104,52 @@ class _AuthPageState extends State<AuthPage> {
   }
 }
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
   final FirebaseAuth auth = FirebaseAuth.instance;
+  final taskController = TextEditingController();
+  final timeController = TextEditingController();
 
   void _signOut() async {
     await auth.signOut();
   }
 
-  Stream<List<String>> getItems() {
-    return FirebaseFirestore.instance.collection('items').snapshots().map(
-          (snapshot) => snapshot.docs.map((doc) => doc['name'] as String).toList(),
-    );
+  Future<void> _addTask() async {
+    if (taskController.text.trim().isEmpty) return;
+    await FirebaseFirestore.instance.collection('tasks').add({
+      'name': taskController.text.trim(),
+      'completed': false,
+      'time': timeController.text.trim(),
+      'userId': auth.currentUser?.uid,
+    });
+    taskController.clear();
+    timeController.clear();
+  }
+
+  Future<void> _updateTask(String taskId, bool completed) async {
+    await FirebaseFirestore.instance.collection('tasks').doc(taskId).update({
+      'completed': completed,
+    });
+  }
+
+  Future<void> _deleteTask(String taskId) async {
+    await FirebaseFirestore.instance.collection('tasks').doc(taskId).delete();
+  }
+
+  Stream<List<Task>> getTasks() {
+    return FirebaseFirestore.instance
+        .collection('tasks')
+        .where('userId', isEqualTo: auth.currentUser?.uid)
+        .snapshots()
+        .map((snapshot) => snapshot.docs
+        .map((doc) => Task.fromFirestore(doc.id, doc.data()))
+        .toList());
   }
 
   @override
@@ -123,7 +158,7 @@ class HomePage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Home'),
+        title: const Text('Task List'),
         actions: [
           IconButton(onPressed: _signOut, icon: const Icon(Icons.logout)),
         ],
@@ -134,9 +169,27 @@ class HomePage extends StatelessWidget {
             padding: const EdgeInsets.all(16.0),
             child: Text('Welcome, $userEmail', style: const TextStyle(fontSize: 18)),
           ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: taskController,
+              decoration: const InputDecoration(labelText: 'Enter Task'),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: timeController,
+              decoration: const InputDecoration(labelText: 'Time (optional)'),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: _addTask,
+            child: const Text('Add Task'),
+          ),
           Expanded(
-            child: StreamBuilder<List<String>>(
-              stream: getItems(),
+            child: StreamBuilder<List<Task>>(
+              stream: getTasks(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting)
                   return const Center(child: CircularProgressIndicator());
@@ -144,20 +197,61 @@ class HomePage extends StatelessWidget {
                 if (snapshot.hasError)
                   return Center(child: Text('Error: ${snapshot.error}'));
 
-                final items = snapshot.data ?? [];
+                final tasks = snapshot.data ?? [];
 
-                if (items.isEmpty)
-                  return const Center(child: Text('No items found in Firestore.'));
+                if (tasks.isEmpty)
+                  return const Center(child: Text('No tasks found.'));
 
                 return ListView.builder(
-                  itemCount: items.length,
-                  itemBuilder: (_, i) => ListTile(title: Text(items[i])),
+                  itemCount: tasks.length,
+                  itemBuilder: (_, index) {
+                    final task = tasks[index];
+                    return ListTile(
+                      title: Text(task.name),
+                      subtitle: task.time.isNotEmpty
+                          ? Text('Time: ${task.time}')
+                          : null,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: task.completed,
+                            onChanged: (value) {
+                              _updateTask(task.id, value ?? false);
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () => _deleteTask(task.id),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 );
               },
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class Task {
+  final String id;
+  final String name;
+  final bool completed;
+  final String time;
+
+  Task({required this.id, required this.name, required this.completed, required this.time});
+
+  factory Task.fromFirestore(String id, Map<String, dynamic> data) {
+    return Task(
+      id: id,
+      name: data['name'],
+      completed: data['completed'],
+      time: data['time'] ?? '',
     );
   }
 }
